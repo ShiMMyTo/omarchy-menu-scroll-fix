@@ -1,76 +1,80 @@
-# Omarchy 4 — Mouse Wheel Scroll Speed Fix for the Menu
+# Omarchy — Mouse Wheel Scroll Speed Fix for the Menu and the App Grid
 
-Fix for the slow mouse wheel scroll in the **Omarchy 4** apps menu (and every other Qt Quick list, like the emoji picker).
+The mouse wheel scrolls painfully slowly inside the Omarchy menu, the dock's app
+grid, and their submenus, while it feels normal in every other application.
 
-- **Tested on:** Omarchy 4.0.1-1 (Arch Linux)
-- **Plugin:** `omarchy.menu` (the apps launcher / menu)
+- **Tested on:** Omarchy 4.5.0-3 (Arch Linux, Hyprland 0.57.1, Qt 6.12)
+- **Files patched:** `omarchy.menu` (`Menu.qml`) and `omarchy.dock`'s app grid
+  (`AppGrid.qml`)
 
 ## Problem
 
-The mouse wheel scroll inside the Omarchy menu is very slow, while it is normal in every other application.
-
-## Root cause
-
-The menu is built with Qt Quick (`ListView`, which inherits `Flickable`). By default, the mouse wheel on a Qt Quick `ListView` moves a small fixed amount per wheel tick, with no way to configure it externally. The menu has a long list of applications, so the slow step becomes obvious. Every other list in Omarchy (emoji picker, etc.) behaves the same way.
+Qt Quick `ListView` and `GridView` inherit `Flickable`, which scrolls by a
+small fixed amount per wheel tick and has no externally configurable speed. A
+long list of apps makes that obvious.
 
 ## Fix
 
-Add a transparent `MouseArea` **on top of** the `ListView` (after it in the stacking order) that captures the wheel first and scrolls manually at a configurable speed.
+Add a transparent `MouseArea` **on top of** the list (after it in the stacking
+order) that captures the wheel first and scrolls manually at a configurable
+speed.
 
-**The key trick:** the `MouseArea` must go *after* the `ListView` in the stacking order, with `acceptedButtons: Qt.NoButton` (so clicks still reach the rows). Placed before the `ListView`, the list steals the wheel event and the handler never fires.
+**The key trick:** the `MouseArea` must go *after* the `ListView`/`GridView` in
+the stacking order, with `acceptedButtons: Qt.NoButton` so clicks and drags
+still reach the rows and cells underneath. Placed before the list, the list
+steals the wheel event and the handler never fires.
+
+A `WheelHandler` declared inside the list does **not** work here: the
+`Flickable` keeps handling the wheel itself on this Qt version, which is why
+the fix has to be an overlay and not a handler.
 
 ## Installation
 
-The original menu lives in `/usr/share/omarchy` (read-only). To modify it you must clone the plugin into your own config and edit the copy:
+The files live in `/usr/share/omarchy`, so they are patched as root. The script
+writes a timestamped backup next to each file before touching it, and refuses to
+write anything that does not parse with `qmlformat`.
 
 ```bash
-omarchy plugin clone omarchy.menu
-# creates ~/.config/omarchy/plugins/<username>.menu and activates it
+./install.sh
 ```
 
-Then edit `~/.config/omarchy/plugins/<username>.menu/Menu.qml` and add this block right after the `resultList` ListView (inside the same Item, e.g. just before the closing brace of the list Item):
-
-```qml
-// Placed after the ListView (on top of it) so this transparent
-// MouseArea receives the wheel first; the Qt Quick ListView otherwise
-// scrolls by a fixed tiny amount per wheel tick, which feels slow on
-// a long apps list. acceptedButtons: NoButton lets clicks pass to the
-// rows below.
-MouseArea {
-  anchors.fill: parent
-  acceptedButtons: Qt.NoButton
-  onWheel: function(wheel) {
-    if (wheel.angleDelta.y === 0) return
-    if (resultList.contentHeight <= resultList.height) return
-    var factor = 1
-    var step = resultList.height / 8
-    resultList.contentY = Math.max(0, Math.min(
-      resultList.contentY - wheel.angleDelta.y / 120.0 * step * factor,
-      resultList.contentHeight - resultList.height))
-    wheel.accepted = true
-  }
-}
-```
-
-Alternatively, copy the whole `Menu.qml` from this repo over the cloned one.
-
-## Reload
-
-QML changes are **not** applied live on this plugin. Restart the shell:
+It patches both files, restarts the Omarchy shell, and is safe to run again: an
+already patched file is skipped.
 
 ```bash
-omarchy restart shell
+./install.sh --no-restart    # patch without restarting the shell
+./install.sh --revert        # restore the newest backup of both files
 ```
-
-> Do **not** use `omarchy refresh shell` — it regenerates `shell.json` with Omarchy defaults and replaces your custom config.
 
 ## Adjusting the speed
 
-Inside `onWheel` there are two variables:
+The step is one eighth of the visible list per wheel tick. Change it with:
 
-- `factor` multiplies the speed (raise it to go faster).
-- `step = height / N`. The larger `N`, the slower each wheel click scrolls. To go slower, raise `N` (e.g. `height/12`, `height/16`).
+```bash
+SPEED_DIVISOR=12 ./install.sh    # slower: one twelfth of the list per tick
+SPEED_DIVISOR=5  ./install.sh    # faster
+```
+
+To change the speed of an already patched file, revert first: the script will
+not patch a file twice.
+
+## After an Omarchy update
+
+An update rewrites both files from the package and the fix disappears. Run
+`./install.sh` again. If Omarchy changes the surrounding code, the script stops
+with `anchor not found` instead of writing something broken, and the anchor
+strings in `install.sh` need updating.
+
+## Why not ship the patched files themselves
+
+Earlier versions of this repository shipped a full copy of `Menu.qml`. That copy
+was taken from Omarchy 4.0.1; the menu in 4.5 is a different file, so copying it
+over silently reverts every menu change since. The old copy is kept in `legacy/`
+for reference only. The script exists so the fix tracks whatever version of the
+files is installed.
 
 ## Files
 
-- `Menu.qml` — full modified menu plugin file (clone of `omarchy.menu` for Omarchy 4).
+- `install.sh` — patches `Menu.qml` and `AppGrid.qml`, with backup and revert.
+- `legacy/Menu.qml-omarchy-4.0.1` — the original hand-patched file from Omarchy
+  4.0.1, reference only.
